@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Campus Room Availability Checker</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5d6b7c;--line:#d8dee6;--ok:#146c43;--okbg:#e3f4ea;--no:#a12622;--nobg:#fbe6e5;--warn:#8a5a00;--warnbg:#fff3d6;--accent:#1f4e8c}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#12161c;--card:#1b222b;--ink:#e8edf3;--muted:#9aa8b8;--line:#2f3a47;--ok:#7fd6a4;--okbg:#17352a;--no:#ff9b95;--nobg:#3a1f1e;--warn:#f2c76b;--warnbg:#3a2f12;--accent:#8db6f0}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:16px}
+main{max-width:640px;margin:0 auto}
+h1{font-size:1.4rem;margin:.2em 0}
+h2{font-size:1.05rem;margin:0 0 .6em}
+p.sub{color:var(--muted);margin:0 0 16px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+label{display:block;font-weight:600;margin:10px 0 4px}
+input[type=datetime-local],input[type=number]{width:100%;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+.row{display:flex;gap:8px;align-items:center;margin-top:12px}
+.row input{width:auto}
+button{font:inherit;padding:10px 16px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;margin-top:14px}
+button.sec{background:transparent;color:var(--accent)}
+button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#result{margin-top:14px;padding:12px;border-radius:8px;display:none}
+#result.ok{display:block;background:var(--okbg);color:var(--ok)}
+#result.no{display:block;background:var(--nobg);color:var(--no)}
+#result.warn{display:block;background:var(--warnbg);color:var(--warn)}
+#result b{display:block;font-size:1.1rem}
+ul{padding-left:20px;margin:0}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;white-space:nowrap}
+.pass{color:var(--ok);font-weight:700}.fail{color:var(--no);font-weight:700}
+</style>
+</head>
+<body>
+<main>
+<h1>Room availability checker</h1>
+<p class="sub">Fictional room A-101. Existing bookings are fixed and never changed by a check.</p>
+
+<section aria-labelledby="bk">
+<h2 id="bk">Existing bookings (tomorrow)</h2>
+<ul id="bookings"></ul>
+</section>
+
+<section aria-labelledby="chk">
+<h2 id="chk">Check a time</h2>
+<label for="start">Start time</label>
+<input id="start" type="datetime-local">
+<label for="dur">Duration (minutes, 1–120)</label>
+<input id="dur" type="number" inputmode="numeric" value="60">
+<div class="row"><input id="blocked" type="checkbox"><label for="blocked" style="margin:0;font-weight:400">Room is blocked (maintenance)</label></div>
+<button id="check" type="button">Check availability</button>
+<div id="result" role="status" aria-live="polite"></div>
+</section>
+
+<section aria-labelledby="tst">
+<h2 id="tst">Acceptance tests (T1–T8)</h2>
+<button class="sec" id="runtests" type="button" style="margin-top:0">Run tests</button>
+<div class="scroll"><table id="tests" hidden><thead><tr><th>ID</th><th>Case</th><th>Expected</th><th>Observed</th><th></th></tr></thead><tbody></tbody></table></div>
+<p class="sub" id="summary" style="margin-top:10px"></p>
+</section>
+</main>
+
+<script>
+/* ===== 1. DATA (fictional) ===== */
+function dayAt(offsetDays,h,m){const d=new Date();d.setDate(d.getDate()+offsetDays);d.setHours(h,m,0,0);return d}
+function makeBookings(){return[
+ {id:"B1",title:"Algorithms seminar",start:dayAt(1,10,0),end:dayAt(1,11,0)},
+ {id:"B2",title:"Study group",start:dayAt(1,13,0),end:dayAt(1,14,30)}]}
+const BOOKINGS=makeBookings();
+
+/* ===== 2. RULES (pure, no DOM) ===== */
+const MAX_MIN=120;
+function validate({start,duration,now}){
+  if(!(start instanceof Date)||isNaN(start)) return{code:"INVALID_START",message:"Enter a valid start date and time."};
+  if(typeof duration!=="number"||!Number.isFinite(duration)) return{code:"INVALID_DURATION",message:"Enter the duration as a number of minutes."};
+  if(start<=now) return{code:"PAST_START",message:"Start time must be in the future."};
+  if(duration<=0) return{code:"DURATION_TOO_SHORT",message:"Duration must be greater than 0 minutes."};
+  if(duration>MAX_MIN) return{code:"DURATION_TOO_LONG",message:"Duration cannot exceed "+MAX_MIN+" minutes."};
+  return null;
+}
+function checkAvailability({start,duration,blocked,bookings,now=new Date()}){
+  const err=validate({start,duration,now});
+  if(err) return{valid:false,available:false,...err};
+  if(blocked) return{valid:true,available:false,code:"ROOM_BLOCKED",message:"Unavailable: the room is blocked."};
+  const end=new Date(start.getTime()+duration*60000);
+  const hit=bookings.find(b=>start<b.end&&end>b.start);   // adjacent intervals do not overlap
+  if(hit) return{valid:true,available:false,code:"OVERLAP",message:"Unavailable: overlaps with “"+hit.title+"”."};
+  return{valid:true,available:true,code:"OK",message:"Available for the selected time."};
+}
+
+/* ===== 3. UI (display only) ===== */
+const $=id=>document.getElementById(id);
+const fmt=d=>d.toLocaleString([], {dateStyle:"medium",timeStyle:"short"});
+function toLocalInput(d){const p=n=>String(n).padStart(2,"0");return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"T"+p(d.getHours())+":"+p(d.getMinutes())}
+function renderBookings(){const ul=$("bookings");ul.textContent="";BOOKINGS.forEach(b=>{const li=document.createElement("li");li.textContent=b.title+": "+fmt(b.start)+" – "+b.end.toLocaleTimeString([], {timeStyle:"short"});ul.appendChild(li)})}
+function show(r){
+  const box=$("result");box.textContent="";
+  const t=document.createElement("b"),m=document.createElement("span");
+  t.textContent=r.valid?(r.available?"Available":"Unavailable"):"Check your input";
+  m.textContent=r.message+" ["+r.code+"]";
+  box.append(t,m);box.className=r.valid?(r.available?"ok":"no"):"warn";
+}
+$("check").addEventListener("click",()=>{
+  const raw=$("start").value;
+  show(checkAvailability({start:raw?new Date(raw):null,duration:$("dur").value===""?NaN:Number($("dur").value),blocked:$("blocked").checked,bookings:BOOKINGS}));
+});
+$("start").value=toLocalInput(dayAt(1,11,30));
+renderBookings();
+
+/* ===== 4. TESTS ===== */
+function runTests(){
+  const fresh=makeBookings(), snap=JSON.stringify(fresh), now=new Date();
+  const T=[
+   ["T1","Free interval 11:30, 60 min","Available",{start:dayAt(1,11,30),duration:60,blocked:false}],
+   ["T2","Overlap 10:30, 60 min","OVERLAP",{start:dayAt(1,10,30),duration:60,blocked:false}],
+   ["T3","Blocked room 15:00","ROOM_BLOCKED",{start:dayAt(1,15,0),duration:60,blocked:true}],
+   ["T4","Duration 0","DURATION_TOO_SHORT",{start:dayAt(1,15,0),duration:0,blocked:false}],
+   ["T5","Duration 121","DURATION_TOO_LONG",{start:dayAt(1,15,0),duration:121,blocked:false}],
+   ["T6","Past start","PAST_START",{start:dayAt(-1,10,0),duration:60,blocked:false}],
+   ["T7","Adjacent 11:00, 60 min","Available",{start:dayAt(1,11,0),duration:60,blocked:false}]];
+  const rows=T.map(([id,name,exp,inp])=>{
+    const r=checkAvailability({...inp,bookings:fresh,now});
+    const obs=r.available?"Available":r.code;
+    return[id,name,exp,obs,obs===exp];
+  });
+  rows.push(["T8","Bookings unchanged after checks","Unchanged",JSON.stringify(fresh)===snap?"Unchanged":"Changed",JSON.stringify(fresh)===snap]);
+  const tb=document.querySelector("#tests tbody");tb.textContent="";
+  rows.forEach(r=>{const tr=document.createElement("tr");r.slice(0,4).forEach(v=>{const td=document.createElement("td");td.textContent=v;tr.appendChild(td)});
+    const td=document.createElement("td");td.textContent=r[4]?"PASS":"FAIL";td.className=r[4]?"pass":"fail";tr.appendChild(td);tb.appendChild(tr)});
+  $("tests").hidden=false;
+  const n=rows.filter(r=>r[4]).length;
+  $("summary").textContent=n+" / 8 passed (observed in this browser run).";
+}
+$("runtests").addEventListener("click",runTests);
+</script>
+</body>
+</html>
